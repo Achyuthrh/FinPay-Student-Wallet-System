@@ -1,397 +1,495 @@
-# 💳 FinPay – Student Wallet, Payments & Cashback
+from pathlib import Path
 
-FinPay is a campus payment application where **students** top up a wallet and pay **merchants** (canteen, bookstore, etc.), earn **cashback** on payments, and an **admin** runs a **monthly reconciliation** report.
+readme = r'''# FinPay – Student Wallet, Payments & Cashback System
 
-Built with **Python + FastAPI + SQLAlchemy (SQLite)** using **Layered Architecture**, with a simple web UI served by the same server.
+A campus wallet application built with **Python, FastAPI, SQLAlchemy and SQLite**. Students can add money to their wallet, pay registered campus merchants and earn cashback. Merchants can view payments received, while administrators can generate monthly reconciliation reports.
+
+> **Project type:** Academic / demonstration project  
+> **Architecture:** Layered Architecture  
+> **Frontend:** HTML, CSS and JavaScript served by FastAPI
 
 ---
 
 ## Table of Contents
-1. [Features](#features)
-2. [Architecture](#architecture)
-3. [Tech Stack](#tech-stack)
-4. [Project Structure](#project-structure)
-5. [Database Design](#database-design)
-6. [Roles & Permissions](#roles--permissions)
-7. [Business Rules](#business-rules)
-8. [Payment Flow](#payment-flow)
-9. [Monthly Reconciliation](#monthly-reconciliation)
-10. [API Reference](#api-reference)
-11. [Web Screens](#web-screens)
-12. [How to Run](#how-to-run)
-13. [Demo Walkthrough](#demo-walkthrough)
-14. [Testing](#testing)
-15. [Configuration](#configuration)
-16. [Error Handling](#error-handling)
-17. [Limitations & Future Work](#limitations--future-work)
+
+- [Key Features](#key-features)
+- [Technology Stack](#technology-stack)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Roles and Permissions](#roles-and-permissions)
+- [Business Rules](#business-rules)
+- [Payment Workflow](#payment-workflow)
+- [Database Overview](#database-overview)
+- [Getting Started](#getting-started)
+- [Using the Application](#using-the-application)
+- [API Reference](#api-reference)
+- [Running Tests](#running-tests)
+- [Configuration](#configuration)
+- [Error Responses](#error-responses)
+- [Limitations and Future Improvements](#limitations-and-future-improvements)
 
 ---
 
-## Features
+## Key Features
 
-| Area | What it does |
+| Module | Features |
 |---|---|
-| **Authentication** | Register and login with email + password, JWT tokens, role-based access (student / merchant / admin) |
-| **Student wallet** | Every student gets a wallet automatically. Top up, check balance, view full wallet history |
-| **Payment processing** | Student pays a merchant. Amount and balance are validated, wallet is debited, transaction is stored |
-| **Cashback calculation** | Cashback is calculated on every eligible payment and credited back to the student's wallet |
-| **Merchant management** | Merchant accounts create a business profile, students see the list of merchants, merchants see payments received |
-| **Monthly reconciliation** | Admin report with total sales, total cashback, per-merchant settlement and a wallet-vs-ledger consistency check |
-| **Web UI** | Login/register page plus separate dashboards for student, merchant and admin |
+| Authentication | User registration and login, JWT-based authentication, role-based access |
+| Student wallet | Automatic wallet creation, wallet top-up, balance display and transaction history |
+| Payments | Pay registered merchants, validate payment amount and available balance |
+| Cashback | Calculate and credit cashback for eligible payments |
+| Merchant | Create a merchant profile and view payments received |
+| Admin | Generate monthly sales, cashback and merchant settlement reports |
+| Reconciliation | Compare wallet balances with ledger entries to identify mismatches |
+| Web interface | Separate dashboards for students, merchants and administrators |
+
+---
+
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Programming language | Python 3.10+ |
+| Backend framework | FastAPI |
+| ASGI server | Uvicorn |
+| ORM | SQLAlchemy |
+| Database | SQLite |
+| Authentication | JWT (PyJWT) |
+| Password security | PBKDF2-SHA256 with salt |
+| Frontend | HTML, CSS and JavaScript |
+| Testing | pytest and FastAPI TestClient |
 
 ---
 
 ## Architecture
 
-FinPay uses **Layered Architecture**. The application is divided into layers, and each layer has one responsibility. A request flows **downward only**:
+FinPay follows **Layered Architecture**. Each layer has a specific responsibility, which keeps request handling, business rules and database access separate.
 
+```text
+             Browser / API Client
+                     |
+                     v
+              Router / API Layer
+                     |
+                     v
+               Service Layer
+              (Business Rules)
+                     |
+                     v
+             Repository Layer
+               (Data Access)
+                     |
+                     v
+                Model Layer
+                     |
+                     v
+                SQLite DB
 ```
-Client (browser / Swagger)
-        ↓
-Router        →  receives the HTTP request, checks the user's role
-        ↓
-Service       →  all business rules (validation, cashback, reconciliation)
-        ↓
-Repository    →  only database queries, no business rules
-        ↓
-Model         →  table definitions (data structure)
-        ↓
-Database      →  SQLite (finpay.db)
-```
 
-### What each layer does
+### Layer responsibilities
 
-| Layer | Folder | Responsibility | Must NOT |
-|---|---|---|---|
-| **Router / API** | `app/routers` | Accept requests, validate input shape, check role, call a service, return the response | contain business rules or touch the database |
-| **Service / Business Logic** | `app/services` | Business rules: payment validation, cashback, atomic commit, reconciliation | write SQL or know about HTTP |
-| **Repository / Data Access** | `app/repositories` | Create, read and query records | contain business rules or commit transactions |
-| **Model / Data** | `app/models` | Define tables and columns | contain logic |
-| **Database** | `finpay.db` | Stores the data | – |
+| Layer | Location | Responsibility |
+|---|---|---|
+| Router / API | `app/routers/` | Receives HTTP requests, applies role checks and calls services |
+| Service | `app/services/` | Implements wallet, payment, cashback and reconciliation rules |
+| Repository | `app/repositories/` | Performs database queries and data operations |
+| Model | `app/models/` | Defines database tables and relationships |
+| Core | `app/core/` | Provides database setup, security, errors and utilities |
 
-### Dependency rules followed
-- Routers call **services only**, never repositories.
-- Services call **repositories** (and other services at the same level, e.g. payment → wallet / cashback).
-- Repositories use **models** only and hold **no business rules**.
-- Services control the **commit**, so one payment is saved atomically.
+### Why Layered Architecture?
 
-### Why Layered for FinPay
-- Money handling needs strong consistency. A payment (debit + transaction + cashback) must succeed or fail as one unit, which is simple inside one application and one database.
-- Business rules like cashback live in **one place** (`cashback_service.py`). A rule change touches only the service layer.
-- It is easy to know where any new code belongs.
-- Simple to build, run and demo compared with microservices or event-driven designs.
+- Keeps business logic separate from HTTP request handling.
+- Makes payment and cashback rules easier to locate and maintain.
+- Separates database operations from business decisions.
+- Provides a clear structure for adding or changing features.
 
-### Other architectures considered
-Monolithic, MVC, Modular Monolith, Microservices and Event-Driven were considered. Layered was chosen because FinPay is mainly a REST API (so MVC's View layer doesn't map directly), and microservices/event-driven add distributed-system complexity that isn't needed for this scope.
-
-### Limitation of this approach
-Layering only works while the dependency rules are respected. If routers start calling repositories directly, or services start containing queries, responsibilities get mixed again.
-
----
-
-## Tech Stack
-
-| Part | Technology |
-|---|---|
-| Language | Python 3.10+ |
-| Web framework | FastAPI |
-| Server | Uvicorn |
-| ORM | SQLAlchemy |
-| Database | SQLite |
-| Auth | JWT (PyJWT), passwords hashed with PBKDF2-SHA256 + salt |
-| Frontend | Plain HTML, CSS and JavaScript (single page, served by FastAPI) |
-| Testing | pytest + FastAPI TestClient |
+For payment processing, the service layer coordinates the related operations so they are committed together or rolled back if an operation fails.
 
 ---
 
 ## Project Structure
 
-```
-finpay/
+```text
+FINPAY-main/
 ├── app/
-│   ├── main.py                     # app entry point, registers routers, serves the UI
-│   ├── schemas.py                  # request/response models (Pydantic)
+│   ├── main.py
+│   ├── schemas.py
 │   ├── core/
-│   │   ├── database.py             # engine, session, Base
-│   │   ├── security.py             # password hashing, JWT, role checks
-│   │   ├── errors.py               # AppError (business errors)
-│   │   └── utils.py                # helpers
-│   ├── routers/                    # LAYER 1 – API
+│   │   ├── database.py
+│   │   ├── errors.py
+│   │   ├── security.py
+│   │   └── utils.py
+│   ├── routers/
 │   │   ├── auth_router.py
 │   │   ├── wallet_router.py
 │   │   ├── merchant_router.py
 │   │   ├── payment_router.py
 │   │   ├── cashback_router.py
 │   │   └── reconciliation_router.py
-│   ├── services/                   # LAYER 2 – business logic
+│   ├── services/
 │   │   ├── auth_service.py
 │   │   ├── wallet_service.py
 │   │   ├── merchant_service.py
 │   │   ├── payment_service.py
 │   │   ├── cashback_service.py
 │   │   └── reconciliation_service.py
-│   ├── repositories/               # LAYER 3 – data access
+│   ├── repositories/
 │   │   ├── user_repository.py
 │   │   ├── wallet_repository.py
 │   │   ├── merchant_repository.py
 │   │   ├── transaction_repository.py
 │   │   └── cashback_repository.py
-│   ├── models/                     # LAYER 4 – data models
+│   ├── models/
 │   │   ├── user.py
-│   │   ├── wallet.py               # Wallet + WalletLedger
+│   │   ├── wallet.py
 │   │   ├── merchant.py
 │   │   ├── transaction.py
 │   │   └── cashback.py
 │   └── static/
-│       └── index.html              # web UI
+│       └── index.html
 ├── tests/
-│   └── test_flow.py                # end-to-end tests
+│   └── test_flow.py
 ├── requirements.txt
+├── .gitignore
 └── README.md
 ```
 
 ---
 
-## Database Design
-
-| Table | Key columns | Purpose |
-|---|---|---|
-| `users` | id, name, email (unique), password_hash, role, created_at | All accounts (student / merchant / admin) |
-| `wallets` | id, user_id (unique), balance | One wallet per student |
-| `wallet_ledger` | id, user_id, entry_type, amount (signed), reference, created_at | Every balance change: `TOPUP` (+), `PAYMENT` (−), `CASHBACK` (+) |
-| `merchants` | id, user_id (unique), business_name, category | Merchant profile for a merchant account |
-| `transactions` | id, student_id, merchant_id, amount, cashback, status, created_at | Each payment (`PENDING` → `SUCCESS`) |
-| `cashback_records` | id, student_id, transaction_id (unique), amount, rate, created_at | Cashback given per transaction |
-
-Relationships: a student has one wallet and many ledger entries and transactions. A merchant account has one merchant profile that receives many transactions. Each successful eligible transaction has one cashback record.
-
-The `wallet_ledger` table is what makes reconciliation possible: a wallet's balance must equal the sum of its ledger entries.
-
----
-
-## Roles & Permissions
+## Roles and Permissions
 
 | Action | Student | Merchant | Admin |
 |---|:---:|:---:|:---:|
-| Register / login | ✅ | ✅ | ✅ |
-| Top up, view balance and wallet history | ✅ | – | – |
-| Pay a merchant, view own payments | ✅ | – | – |
-| View cashback history | ✅ | – | – |
-| Create merchant profile, view payments received | – | ✅ | – |
-| View list of merchants and cashback rules | ✅ | ✅ | ✅ |
-| Monthly reconciliation report | – | – | ✅ |
+| Register and log in | Yes | Yes | Yes |
+| Top up wallet | Yes | — | — |
+| View wallet balance and history | Yes | — | — |
+| Pay a merchant | Yes | — | — |
+| View own payment and cashback history | Yes | — | — |
+| Create merchant profile | — | Yes | — |
+| View payments received | — | Yes | — |
+| View merchant list and cashback rules | Yes | Yes | Yes |
+| View monthly reconciliation report | — | — | Yes |
 
 ---
 
 ## Business Rules
 
-**Wallet**
-- A wallet is created automatically when a student registers.
-- Top-up amount must be greater than 0, with a maximum of **₹50,000 per top-up**.
-- A payment is rejected if the balance is lower than the amount.
+### Wallet
 
-**Cashback** (edit the constants in `app/services/cashback_service.py`)
+- A wallet is created automatically when a student registers.
+- A top-up amount must be greater than zero.
+- The maximum top-up amount is **₹50,000 per transaction**.
+- A payment is rejected when the wallet balance is insufficient.
+
+### Cashback
+
+The current cashback rules are:
 
 | Rule | Value |
+|---|---:|
+| Cashback rate | 2% |
+| Minimum eligible payment | ₹100 |
+| Maximum cashback per payment | ₹50 |
+
+Examples:
+
+- A ₹500 eligible payment earns ₹10 cashback.
+- A ₹50 payment earns no cashback.
+- A ₹5,000 payment earns ₹50 cashback because of the cap.
+
+The cashback settings are maintained in `app/services/cashback_service.py`.
+
+### Account rules
+
+- Email addresses must be unique.
+- Passwords must contain at least 6 characters.
+- A merchant account can create one merchant profile.
+
+---
+
+## Payment Workflow
+
+Example: a student pays a merchant ₹500.
+
+1. The payment router receives the request and checks that the user has the student role.
+2. The payment service validates the amount and merchant.
+3. The wallet service checks the student's available balance and records the debit.
+4. The cashback service calculates eligible cashback and records the credit.
+5. The transaction and related ledger records are committed together.
+6. The payment is marked as successful.
+
+The application is designed so that a failed payment operation is rolled back rather than leaving only part of the payment recorded.
+
+---
+
+## Database Overview
+
+| Table | Purpose |
 |---|---|
-| Cashback rate | **2%** of the payment |
-| Minimum payment to earn cashback | **₹100** |
-| Maximum cashback per payment | **₹50** |
+| `users` | Stores student, merchant and admin accounts |
+| `wallets` | Stores wallet balances |
+| `wallet_ledger` | Records top-ups, payments and cashback entries |
+| `merchants` | Stores merchant business profiles |
+| `transactions` | Stores payment transaction details and status |
+| `cashback_records` | Stores cashback details associated with transactions |
 
-Examples: ₹500 payment → ₹10 cashback. ₹50 payment → ₹0 (below minimum). ₹5000 payment → ₹50 (capped, not ₹100).
-
-**Accounts**
-- Email must be unique. Password must be at least 6 characters.
-- A merchant account can create only one merchant profile.
-
----
-
-## Payment Flow
-
-`POST /payments` for ₹500 to a merchant:
-
-```
-payment_router      receives request, confirms the user is a student
-   ↓
-payment_service     validates amount, checks merchant exists, creates a PENDING transaction
-   ↓
-wallet_service      checks balance and debits the wallet, adds a PAYMENT ledger entry
-   ↓
-cashback_service    calculates cashback, credits the wallet, adds a CASHBACK ledger entry
-   ↓
-repositories        save transaction, ledger entries, cashback record
-   ↓
-payment_service     marks the transaction SUCCESS and commits once
-```
-
-**Atomic:** the debit, transaction and cashback are committed together. If any step fails (for example insufficient balance), everything is rolled back and nothing is saved.
+The wallet ledger records balance changes. Reconciliation uses the ledger entries to check whether each stored wallet balance matches the sum of its recorded entries.
 
 ---
 
-## Monthly Reconciliation
+## Getting Started
 
-Admin-only report for one month. It returns:
-- **Total transactions, total sales and total cashback** for the month
-- **Per-merchant settlement:** number of transactions, gross sales, cashback given and the **settlement due** (the amount to pay that merchant)
-- **Wallet consistency check:** for every wallet, the balance is compared with the sum of its ledger entries
-- **Status:** `BALANCED` if every wallet matches, otherwise `MISMATCH_FOUND` with the list of mismatching wallets
+Follow these steps to run FinPay locally.
+
+### 1. Prerequisites
+
+Install:
+
+- Python **3.10 or newer**
+- Git (if you are cloning the repository)
+
+Check your Python installation:
+
+```bash
+python --version
+```
+
+### 2. Get the project
+
+If you are cloning from GitHub:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/FinPay-Student-Wallet-System.git
+cd FinPay-Student-Wallet-System
+```
+
+If you downloaded the ZIP, extract it and open the project directory that contains `app`, `tests` and `requirements.txt`. In the supplied project ZIP, that directory is named `FINPAY-main`.
+
+### 3. Create and activate a virtual environment
+
+**Windows PowerShell:**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, you can use the environment's Python directly:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+**macOS / Linux:**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 4. Install dependencies
+
+With the virtual environment activated:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 5. Start the application
+
+Run this command from the project root—the directory containing the `app` folder:
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+To use a different port, for example `8001`:
+
+```bash
+python -m uvicorn app.main:app --reload --port 8001
+```
+
+### 6. Open FinPay
+
+When the server starts successfully, open:
+
+| Page | URL |
+|---|---|
+| FinPay web application | http://127.0.0.1:8000/ |
+| Interactive API documentation | http://127.0.0.1:8000/docs |
+| Alternative API documentation | http://127.0.0.1:8000/redoc |
+| Health check | http://127.0.0.1:8000/health |
+
+The SQLite database is configured to use `finpay.db` by default and is created by the application when it initializes the database.
+
+---
+
+## Using the Application
+
+A basic demonstration flow:
+
+1. **Create a merchant account:** Register with the Merchant role and create a business profile, for example, `KLE Canteen`.
+2. **Create a student account:** Register with the Student role.
+3. **Add money:** Top up the student wallet.
+4. **Make a payment:** Select the merchant and enter a payment amount.
+5. **Check cashback:** View the payment and cashback in the student dashboard.
+6. **Check merchant activity:** Log in as the merchant and view payments received.
+7. **Check reconciliation:** Log in as an admin and open the monthly reconciliation report.
+
+Use the application's logout option when switching between accounts.
+
+> This is a demonstration workflow. Use test accounts and sample amounts only.
 
 ---
 
 ## API Reference
 
-Interactive docs: **`/docs`** (Swagger). Use **Authorize** and paste the token from `/auth/login`.
+The interactive API documentation is available at:
 
-| Method | Endpoint | Role | Description |
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`
+
+After logging in, use the **Authorize** option in Swagger UI and provide the access token returned by the login endpoint.
+
+| Method | Endpoint | Access | Description |
 |---|---|---|---|
-| POST | `/auth/register` | public | Create an account |
-| POST | `/auth/login` | public | Returns a JWT access token |
-| GET | `/auth/me` | any | Current user |
-| GET | `/wallet/balance` | student | Wallet balance |
-| POST | `/wallet/topup` | student | Add money to the wallet |
-| GET | `/wallet/history` | student | Ledger entries (topups, payments, cashback) |
-| POST | `/merchants` | merchant | Create merchant profile |
-| GET | `/merchants` | any | List all merchants |
-| GET | `/merchants/me` | merchant | Own merchant profile |
-| POST | `/payments` | student | Pay a merchant |
-| GET | `/payments/history` | student | Own payments |
-| GET | `/payments/received` | merchant | Payments received by the merchant |
-| GET | `/cashback/rules` | any | Current cashback rules |
-| GET | `/cashback/history` | student | Cashback earned |
-| GET | `/reconciliation/monthly?year=&month=` | admin | Monthly report |
-| GET | `/health` | public | Health check |
+| POST | `/auth/register` | Public | Register a user |
+| POST | `/auth/login` | Public | Log in and receive an access token |
+| GET | `/auth/me` | Authenticated | Get the current user |
+| GET | `/wallet/balance` | Student | View wallet balance |
+| POST | `/wallet/topup` | Student | Add money to wallet |
+| GET | `/wallet/history` | Student | View wallet ledger |
+| POST | `/merchants` | Merchant | Create merchant profile |
+| GET | `/merchants` | Authenticated | List merchants |
+| GET | `/merchants/me` | Merchant | View own merchant profile |
+| POST | `/payments` | Student | Pay a merchant |
+| GET | `/payments/history` | Student | View own payments |
+| GET | `/payments/received` | Merchant | View payments received |
+| GET | `/cashback/rules` | Authenticated | View cashback rules |
+| GET | `/cashback/history` | Student | View cashback history |
+| GET | `/reconciliation/monthly?year=YYYY&month=MM` | Admin | Generate monthly report |
+| GET | `/health` | Public | Check application health |
 
-### Sample requests
+### Example request bodies
 
-Register:
+Register a student:
+
 ```json
-POST /auth/register
-{"name": "Chaitra", "email": "student@kle.edu", "password": "secret123", "role": "student"}
+{
+  "name": "Chaitra",
+  "email": "student@example.com",
+  "password": "secret123",
+  "role": "student"
+}
 ```
 
-Login response:
-```json
-{"access_token": "<jwt>", "token_type": "bearer", "role": "student"}
-```
+Top up a wallet:
 
-Top up:
 ```json
-POST /wallet/topup
-{"amount": 1000}
+{
+  "amount": 1000
+}
 ```
 
 Pay a merchant:
+
 ```json
-POST /payments
-{"merchant_id": 1, "amount": 500}
+{
+  "merchant_id": 1,
+  "amount": 500
+}
 ```
-Response:
-```json
-{"id": 1, "student_id": 1, "merchant_id": 1, "amount": 500.0, "cashback": 10.0, "status": "SUCCESS", "created_at": "..."}
-```
+
+The exact response schemas are available in Swagger UI.
 
 ---
 
-## Web Screens
+## Running Tests
 
-Open the root URL in a browser. The page changes based on who is logged in.
-
-| Screen | Contents |
-|---|---|
-| **Login / Register** | Two tabs. Register lets you choose Student, Merchant or Admin |
-| **Student dashboard** | Wallet balance and cashback rules, add money, pay a merchant (dropdown + amount), my payments with cashback, wallet history |
-| **Merchant dashboard** | Create business profile (first time), then total received, payment count and payments received table |
-| **Admin dashboard** | Pick year and month, summary cards (period, sales, cashback, wallet check badge), per-merchant settlement table |
-
----
-
-## How to Run
-
-### 1. Requirements
-Python 3.10 or newer.
-
-### 2. Install
-```bash
-cd finpay
-pip install -r requirements.txt
-```
-
-### 3. Start the server
-```bash
-python -m uvicorn app.main:app --reload
-```
-To use a different port (for example if 8000 is busy):
-```bash
-python -m uvicorn app.main:app --reload --port 8001
-```
-
-### 4. Open
-| What | URL (port 8000) |
-|---|---|
-| Web app | http://127.0.0.1:8000/ |
-| API docs (Swagger) | http://127.0.0.1:8000/docs |
-
-The database file `finpay.db` is created automatically on first run. Delete it to start fresh.
-
----
-
-## Demo Walkthrough
-
-1. **Merchant:** open the app → Register → role **Merchant** → create the business profile (e.g. "KLE Canteen", category food).
-2. **Student:** Logout → Register → role **Student** → add ₹1000 → pay the merchant ₹500 → cashback of ₹10 is added → balance becomes ₹510.
-3. **Try a failure:** pay more than the balance and see the "Insufficient wallet balance" message (nothing is saved).
-4. **Admin:** Logout → Register → role **Admin** → open the monthly report → total sales ₹500, cashback ₹10, status **BALANCED**.
-5. **Merchant again:** log in as the merchant to see the payment under "Payments received".
-
-Use **Logout** to switch between users.
-
----
-
-## Testing
+From the project root, with the virtual environment activated, run:
 
 ```bash
 python -m pytest -q
 ```
 
-The end-to-end test uses a temporary database and checks: registration and login for all three roles, merchant profile creation, top-up, payment with 2% cashback, no cashback below ₹100, rejection of an over-balance payment (balance unchanged), role protection (a student cannot open the admin report), the monthly report values with `BALANCED` status, and that the web UI is served.
+The project includes an end-to-end test file at `tests/test_flow.py`. It exercises the main application flow, including authentication, merchant profile creation, wallet top-up, payments, cashback and reconciliation.
 
 ---
 
 ## Configuration
 
-| Environment variable | Default | Purpose |
-|---|---|---|
-| `FINPAY_DB` | `sqlite:///./finpay.db` | Database connection URL |
-| `FINPAY_SECRET` | built-in development key | Secret used to sign JWT tokens. **Change it outside development** |
+FinPay supports the following environment variables:
 
-PowerShell example:
+| Variable | Default | Purpose |
+|---|---|---|
+| `FINPAY_DB` | `sqlite:///./finpay.db` | SQLAlchemy database connection URL |
+| `FINPAY_SECRET` | Development key in application | Secret used to sign JWT tokens |
+
+### Set the JWT secret in Windows PowerShell
+
+Set a development secret before starting the server:
+
 ```powershell
-$env:FINPAY_SECRET = "my-long-random-secret"
-python -m uvicorn app.main:app --reload --port 8001
+$env:FINPAY_SECRET = "replace-this-with-a-long-random-secret"
+python -m uvicorn app.main:app --reload
 ```
 
+For macOS / Linux:
+
+```bash
+export FINPAY_SECRET="replace-this-with-a-long-random-secret"
+python -m uvicorn app.main:app --reload
+```
+
+**Security note:** Never commit real secrets, passwords, access tokens or production environment files to GitHub. The built-in development secret is not suitable for deployment. Use a strong, private secret in any deployed environment.
+
 ---
 
-## Error Handling
+## Error Responses
 
-Business errors are raised in the service layer as `AppError` and returned as JSON like `{"detail": "message"}`.
+Application and validation errors are returned as HTTP responses.
 
-| Status | Meaning | Example |
+| Status code | Meaning | Example |
 |---|---|---|
-| 400 | Business rule failed | Insufficient wallet balance, email already registered |
-| 401 | Not logged in / bad token or credentials | Invalid email or password |
-| 403 | Role not allowed | A student calling the admin report |
-| 404 | Not found | Merchant or wallet not found |
-| 422 | Invalid request body | Negative amount, missing field |
+| 400 | Business rule violation | Insufficient balance or duplicate email |
+| 401 | Authentication required or invalid credentials | Invalid login or token |
+| 403 | Permission denied | Student attempts an admin-only operation |
+| 404 | Requested resource not found | Merchant or wallet not found |
+| 422 | Request validation failed | Missing or invalid request field |
 
 ---
 
-## Limitations & Future Work
+## Limitations and Future Improvements
 
-- **Admin sign-up is open** so the demo is easy to run. In production, admin accounts would be created only by an existing admin.
-- **Money uses floating-point rounding to 2 decimals.** A production system would use `Decimal` or store amounts in paise.
-- **Settlement due** is calculated from gross sales. Merchant wallets, payouts and fees are not modelled.
-- **SQLite** is used for simplicity. For production, switch to PostgreSQL (change `FINPAY_DB`).
-- Possible additions: refunds, transaction PDF statements, pagination, rate limiting, password reset.
+This project is intended for learning and demonstration. It is not a production banking or payment platform.
 
+Current limitations and possible improvements:
 
+- **Admin registration:** Admin registration is available for demonstration. A production system should restrict admin account creation.
+- **Money precision:** The current implementation uses floating-point amounts rounded to two decimal places. A production financial system should use `Decimal` or integer paise.
+- **Settlement:** Merchant settlement is reported from transaction data; actual bank payouts, fees and merchant wallet operations are outside the current scope.
+- **Database:** SQLite is used for local development. PostgreSQL could be considered for a larger deployment.
+- **Additional features:** Refunds, downloadable statements, pagination, rate limiting, password reset and audit logging.
+
+---
+
+## Contributing
+
+Suggestions and improvements are welcome.
+
+1. Fork the repository.
+2. Create a feature branch.
+3. Make and test your changes.
+4. Open a pull request describing the change.
+
+---
+
+## Disclaimer
+
+FinPay is an educational project created to demonstrate wallet operations, role-based access, payment workflows, cashback calculation, layered software architecture and reconciliation. It does not connect to real banks or payment gateways and should not be used to store or transfer real money.
+'''
+path = Path("/mnt/data/README_FinPay_Improved.md")
+path.write_text(readme, encoding="utf-8")
+print(f"Created: {path}")
+print(f"Size: {path.stat().st_size} bytes")
